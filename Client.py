@@ -1,29 +1,46 @@
-from socket import socket, AF_INET, SOCK_STREAM
-from threading import Thread
+from socket import *
+import threading
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 
-def handle_receive(client_socket):
+def handle_receive(client_socket, server_id):
     while True:
         try:
-            response = client_socket.recv(1024).decode()
+            response = client_socket.recv(1024)
             if not response:
-                # Connection closed
-                print("Server disconnected.")
+                print("\nServer disconnected.")
                 break
-            print(f"Server says: {response}")
-            if response.startswith("Bye from Server"):
-                # Server wants to terminate the connection
+            response = response.decode()
+            print(f"\nServer says: {response}")
+            if response == f"Bye from Server {server_id}":
+                print("Termination message received from server.")
                 break
+        except ConnectionResetError:
+            print("\nConnection was reset by the server.")
+            break
         except Exception as e:
-            print(f"Error receiving message: {e}")
+            print(f"\nError receiving message: {e}")
             break
 
+    # Do not close the socket here
+
 def handle_send(client_socket, client_id):
-    while True:
-        message = input("You: ")
-        client_socket.sendall(message.encode())
-        if message == f"Bye from Client {client_id}":
-            # Client wants to terminate the connection
-            break
+    session = PromptSession()
+    with patch_stdout():
+        while True:
+            try:
+                message = session.prompt()
+                client_socket.sendall(message.encode())
+                if message == f"Bye from Client {client_id}":
+                    print("Termination message sent.")
+                    break
+            except EOFError:
+                break
+            except Exception as e:
+                print(f"\nError sending message: {e}")
+                break
+
+    # Do not shutdown or close the socket here
 
 def client():
     server_name = 'localhost'
@@ -39,14 +56,16 @@ def client():
     print(f"Hello from Server {server_id}.")
 
     # Create threads for sending and receiving messages
-    receive_thread = Thread(target=handle_receive, args=(client_socket,))
-    send_thread = Thread(target=handle_send, args=(client_socket, client_id))
+    receive_thread = threading.Thread(target=handle_receive, args=(client_socket, server_id))
+    send_thread = threading.Thread(target=handle_send, args=(client_socket, client_id))
 
     receive_thread.start()
     send_thread.start()
 
-    # Wait for the send thread to finish
+    # Wait for both threads to finish
     send_thread.join()
+    receive_thread.join()
+
     # Close the socket
     client_socket.close()
     print("Client connection closed.")
