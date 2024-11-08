@@ -3,9 +3,16 @@ import threading
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 
-SERVER_NAME = 'localhost'
+def broadcast_message(message, sender_socket, group_name, groups):
+    with groups_lock:
+        for client in groups[group_name]:
+            if client != sender_socket:
+                try:
+                    client.sendall(message.encode('utf-8'))
+                except Exception as e:
+                    print(f"Error broadcasting to a client: {e}")
 
-def handle_receive(client_socket, stop_event, client_id, session):
+def handle_receive(client_socket, stop_event, client_id, session, group_name, groups):
     while not stop_event.is_set():
         try:
             message = client_socket.recv(1024)
@@ -62,12 +69,9 @@ def handle_receive(client_socket, stop_event, client_id, session):
                 client_socket.sendall(modified_file_data)
                 print(f"Sent modified file 'received_{filename}' back to client.")
             else:
-                print(f"\nClient says: {message}")
-                if message == f"Bye from Client {client_id}":
-                    print("Termination message received from client.")
-                    stop_event.set()
-                    session.app.exit()
-                    break
+                print(f"\n[{group_name}] {client_id} says: {message}")
+                # Broadcast the message to other clients in the same group
+                broadcast_message(f"{client_id}: {message}", client_socket, group_name, groups)
         except ConnectionResetError:
             print("\nConnection was reset by the client.")
             break
@@ -102,43 +106,84 @@ def handle_send(client_socket, stop_event, server_id, session):
 
     # Do not shutdown or close the socket here
 
-def server():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((SERVER_NAME, 12000))
-    server_socket.listen(1)
-    print("Server is listening on port 12000...")
-    
-    client_socket, address = server_socket.accept()
-    print(f"Connected to client at {address}")
-    
-    # Receive client ID
-    client_id = client_socket.recv(1024).decode()
-    print(f'Client says: Hello from Client {client_id}')
-    
-    server_id = input('Enter your user ID: ')
-    client_socket.sendall(server_id.encode())
-    print(f"Sent server ID: {server_id}")
-
-    client_socket.settimeout(1.0)
-
+def handle_client(client_socket, address, groups):
     session = PromptSession()
-    stop_event = threading.Event()
+    client_id = ''
+    server_id = 'Server'
 
-    # Create threads for sending and receiving messages
-    receive_thread = threading.Thread(target=handle_receive, args=(client_socket, stop_event, client_id, session))
-    send_thread = threading.Thread(target=handle_send, args=(client_socket, stop_event, server_id, session))
+    try:
+        # Receive client ID
+        client_id = client_socket.recv(1024).decode('utf-8')
+        print(f'Client says: Hello from Client {client_id}')
+        # Send server ID
+        client_socket.sendall(server_id.encode('utf-8'))
+        print(f"Sent server ID to Client {client_id}.")
 
-    receive_thread.start()
-    send_thread.start()
+        # Receive group name from client
+        group_name = client_socket.recv(1024).decode('utf-8')
+        print(f"Client {client_id} wants to join group '{group_name}'.")
 
-    # Wait for both threads to finish
-    send_thread.join()
-    receive_thread.join()
+        # Add client to the group
+        with groups_lock:
+            if group_name not in groups:
+                groups[group_name] = []
+            groups[group_name].append(client_socket)
 
-    # Close the client socket and server socket
-    client_socket.close()
-    server_socket.close()
-    print("Server connection closed.")
+        # Set a timeout on the socket
+        client_socket.settimeout(1.0)
+
+        stop_event = threading.Event()
+
+        # Create threads for sending and receiving messages
+        receive_thread = threading.Thread(target=handle_receive, args=(client_socket, stop_event, client_id, session, group_name, groups))
+        send_thread = threading.Thread(target=handle_send, args=(client_socket, stop_event, client_id, session))
+
+        receive_thread.start()
+        send_thread.start()
+
+        # Wait for both threads to finish
+        receive_thread.join()
+        send_thread.join()
+    except Exception as e:
+        print(f"Error with client {client_id}: {e}")
+    finally:
+        # Remove the client socket from the group
+        with groups_lock:
+            groups[group_name].remove(client_socket)
+            if not groups[group_name]:
+                del groups[group_name]
+        client_socket.close()
+        print(f"Connection with Client {client_id} closed.")
+
+def server():
+    SERVER_NAME = 'localhost'
+    SERVER_PORT = 12000
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((SERVER_NAME, SERVER_PORT))
+    server_socket.listen(5)  # Allow up to 5 pending connections
+    print(f"Server is listening on port {SERVER_PORT}...")
+    client_threads = []
+    groups = {}
+    global groups_lock
+    groups_lock = threading.Lock()
+    
+    try:
+        while True:
+            client_socket, address = server_socket.accept()
+            print(f"Connected to client at {address}")
+
+            # Start a new thread to handle the client
+            client_thread = threading.Thread(target=handle_client, args=(client_socket, address, groups))
+            client_thread.start()
+            client_threads.append(client_thread)
+    except KeyboardInterrupt:
+        print("\nServer shutting down.")
+    finally:
+        # Signal all threads to stop
+        for thread in client_threads:
+            thread.join()
+        server_socket.close()
+        print("Server connection closed.")
 
 if __name__ == '__main__':
     server()

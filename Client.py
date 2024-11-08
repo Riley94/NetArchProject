@@ -95,9 +95,10 @@ def handle_send(client_socket, stop_event, client_id, session):
     # Do not shutdown or close the socket here
 
 def client():
-    server_name = 'localhost'
+    SERVER_NAME = 'localhost'
+    SERVER_PORT = 12000
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.connect((server_name, 12000))
+    client_socket.connect((SERVER_NAME, SERVER_PORT))
     print("Connected to the server.")
 
     client_id = input('Enter your user ID: ')
@@ -106,6 +107,11 @@ def client():
 
     server_id = client_socket.recv(1024).decode()
     print(f"Hello from Server {server_id}.")
+
+    # Send group name to server
+    group_name = input('Enter the group name you want to join: ')
+    client_socket.sendall(group_name.encode('utf-8'))
+    print(f"Requested to join group '{group_name}'.")
 
     client_socket.settimeout(1.0)
 
