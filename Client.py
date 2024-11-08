@@ -2,6 +2,7 @@ import socket
 import threading
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
+import os
 
 def handle_receive(client_socket, stop_event, server_id, session):
     while not stop_event.is_set():
@@ -12,12 +13,28 @@ def handle_receive(client_socket, stop_event, server_id, session):
                 stop_event.set()
                 break
             response = response.decode()
-            print(f"\nServer says: {response}")
-            if response == f"Bye from Server {server_id}":
-                print("Termination message received from server.")
-                stop_event.set()
-                session.app.exit()
-                break
+            if response.startswith("READY_TO_RECEIVE_FILE"):
+                continue
+            elif response.startswith("SENDING_MODIFIED_FILE"):
+                # Server is sending back the modified file
+                # Receive the file size
+                modified_file_size_data = client_socket.recv(1024).decode()
+                modified_file_size = int(modified_file_size_data)
+                # Receive the file data
+                modified_file_data = b''
+                while len(modified_file_data) < modified_file_size:
+                    data = client_socket.recv(1024)
+                    modified_file_data += data
+                # Display the modified file content
+                print("\nReceived modified file content:")
+                print(modified_file_data.decode())
+            else:
+                print(f"\nServer says: {response}")
+                if response == f"Bye from Server {server_id}":
+                    print("Termination message received from server.")
+                    stop_event.set()
+                    session.app.exit()
+                    break
         except ConnectionResetError:
             print("\nConnection was reset by the server.")
             break
@@ -38,11 +55,36 @@ def handle_send(client_socket, stop_event, client_id, session):
                 message = session.prompt()
                 if stop_event.is_set():
                     break
-                client_socket.sendall(message.encode())
-                if message == f"Bye from Client {client_id}":
-                    print("Termination message sent.")
-                    stop_event.set()
-                    break
+                if message.startswith("SEND_FILE"):
+                    # Extract filename
+                    parts = message.split()
+                    if len(parts) != 2:
+                        print("Invalid SEND_FILE command. Usage: SEND_FILE filename")
+                        continue
+                    filename = parts[1]
+                    if not os.path.exists(filename):
+                        print(f"File '{filename}' does not exist.")
+                        continue
+                    # Notify server about file transfer
+                    client_socket.sendall(message.encode())
+                    # Wait for server's response (handled in handle_receive)
+                    # After server sends 'READY_TO_RECEIVE_FILE', proceed to send the file
+                    # Open the file and send the data
+                    with open(filename, 'rb') as file:
+                        file_data = file.read()
+                    file_size = len(file_data)
+                    file_size_str = str(file_size).zfill(10)
+                    # Send file size
+                    client_socket.sendall(file_size_str.encode())
+                    # Send file data
+                    client_socket.sendall(file_data)
+                    print(f"Sent file '{filename}' to server.")
+                else:
+                    client_socket.sendall(message.encode())
+                    if message == f"Bye from Client {client_id}":
+                        print("Termination message sent.")
+                        stop_event.set()
+                        break
             except EOFError:
                 break
             except Exception as e:
