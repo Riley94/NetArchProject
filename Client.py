@@ -29,7 +29,7 @@ def handle_receive(client_socket, stop_event, server_id, session):
                 print("\nReceived modified file content:")
                 print(modified_file_data.decode())
             else:
-                print(f"\nServer says: {response}")
+                print(response)
                 if response == f"Bye from Server {server_id}":
                     print("Termination message received from server.")
                     stop_event.set()
@@ -74,6 +74,7 @@ def handle_send(client_socket, stop_event, client_id, session):
                         file_data = file.read()
                     file_size = len(file_data)
                     file_size_str = str(file_size).zfill(10)
+                    print(f"File size: {file_size} bytes")
                     # Send file size
                     client_socket.sendall(file_size_str.encode())
                     # Send file data

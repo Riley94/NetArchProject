@@ -30,7 +30,6 @@ def handle_receive(client_socket, stop_event, client_id, session, group_name, gr
                 filename = parts[1]
                 # Send acknowledgment to client
                 client_socket.sendall("READY_TO_RECEIVE_FILE".encode())
-                # Receive file size
                 # Receive file size (10 bytes)
                 file_size_data = b''
                 while len(file_size_data) < 10:
@@ -90,13 +89,12 @@ def handle_send(client_socket, stop_event, server_id, session):
         while not stop_event.is_set():
             try:
                 response = session.prompt()
-                if stop_event.is_set():
-                    break
-                client_socket.sendall(response.encode())
                 if response == f"Bye from Server {server_id}":
                     print("Termination message sent.")
                     stop_event.set()
                     break
+                client_socket.sendall(response.encode())
+                
             except EOFError:
                 break
             except Exception as e:
@@ -106,7 +104,7 @@ def handle_send(client_socket, stop_event, server_id, session):
 
     # Do not shutdown or close the socket here
 
-def handle_client(client_socket, address, groups):
+def handle_client(client_socket, stop_event, address, groups):
     session = PromptSession()
     client_id = ''
     server_id = 'Server'
@@ -132,11 +130,9 @@ def handle_client(client_socket, address, groups):
         # Set a timeout on the socket
         client_socket.settimeout(1.0)
 
-        stop_event = threading.Event()
-
         # Create threads for sending and receiving messages
         receive_thread = threading.Thread(target=handle_receive, args=(client_socket, stop_event, client_id, session, group_name, groups))
-        send_thread = threading.Thread(target=handle_send, args=(client_socket, stop_event, client_id, session))
+        send_thread = threading.Thread(target=handle_send, args=(client_socket, stop_event, server_id, session))
 
         receive_thread.start()
         send_thread.start()
@@ -166,16 +162,25 @@ def server():
     groups = {}
     global groups_lock
     groups_lock = threading.Lock()
+
+    global stop_event 
+    stop_event = threading.Event()
+
+    server_socket.settimeout(1.0)
     
     try:
-        while True:
-            client_socket, address = server_socket.accept()
-            print(f"Connected to client at {address}")
+        while not stop_event.is_set():
+            try:
+                client_socket, address = server_socket.accept()
+                print(f"Connected to client at {address}")
 
-            # Start a new thread to handle the client
-            client_thread = threading.Thread(target=handle_client, args=(client_socket, address, groups))
-            client_thread.start()
-            client_threads.append(client_thread)
+                # Start a new thread to handle the client
+                client_thread = threading.Thread(target=handle_client, args=(client_socket, stop_event, address, groups))
+                client_thread.start()
+                client_threads.append(client_thread)
+
+            except socket.timeout:
+                continue
     except KeyboardInterrupt:
         print("\nServer shutting down.")
     finally:
